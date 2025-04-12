@@ -11,7 +11,7 @@ let config = {
     arcade: {
       gravity: { y: 1300 },
       debug: false,
-      fps: 10,
+      fps: 60,
     },
   },
   scene: {
