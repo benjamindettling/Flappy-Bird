@@ -379,7 +379,7 @@ function create() {
 
 function update() {
   if (!this || !this.upperPillars || !this.lowerPillars) return;
-
+  if (!this?.upperPillars?.children || !this?.lowerPillars?.children) return;
   // ✅ still allow training step even when game is over
   if (trainingMode && isAIControlled && this.isGameOver) {
     if (typeof lastObservation !== "undefined") {
