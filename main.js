@@ -3,8 +3,8 @@ let config = {
   scale: {
     mode: Phaser.Scale.ENVELOP,
     autoCenter: Phaser.Scale.CENTER_BOTH,
-    width: 360,
-    height: 640,
+    width: 288,
+    height: 512,
   },
   physics: {
     default: "arcade",
