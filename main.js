@@ -1,3 +1,51 @@
+const isPortrait = window.matchMedia("(orientation: portrait)").matches;
+
+let configPortrait = {
+  // vertical setup (e.g., 360x640)
+  scale: {
+    mode: Phaser.Scale.ENVELOP,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+    width: 288,
+    height: 512,
+  },
+  physics: {
+    default: "arcade",
+    arcade: {
+      gravity: { y: 1300 },
+      debug: false,
+      fps: 60,
+    },
+  },
+  scene: {
+    preload: preload,
+    create: create,
+    update: update,
+  },
+};
+
+let configLandscape = {
+  // horizontal setup (e.g., 640x360)
+  scale: {
+    mode: Phaser.Scale.ENVELOP,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+    width: 1080,
+    height: 512,
+  },
+  physics: {
+    default: "arcade",
+    arcade: {
+      gravity: { y: 1300 },
+      debug: false,
+      fps: 60,
+    },
+  },
+  scene: {
+    preload: preload,
+    create: create,
+    update: update,
+  },
+};
+
 let config = {
   type: Phaser.AUTO,
   scale: {
@@ -60,7 +108,8 @@ let gameStart = false;
 import { DQNAgent } from "./ai.js";
 const tf = window.tf;
 
-let game = new Phaser.Game(config);
+// let game = new Phaser.Game(config);
+let game = new Phaser.Game(isPortrait ? configPortrait : configLandscape);
 
 let agent;
 
