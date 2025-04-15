@@ -13,7 +13,7 @@ let configPortrait = {
     arcade: {
       gravity: { y: 1300 },
       debug: false,
-      fps: 60,
+      fps: 30,
     },
   },
   scene: {
@@ -36,7 +36,7 @@ let configLandscape = {
     arcade: {
       gravity: { y: 1300 },
       debug: false,
-      fps: 60,
+      fps: 30,
     },
   },
   scene: {
@@ -59,7 +59,7 @@ let config = {
     arcade: {
       gravity: { y: 1300 },
       debug: false,
-      fps: 60,
+      fps: 30,
     },
   },
   scene: {
@@ -68,6 +68,10 @@ let config = {
     update: update,
   },
 };
+
+import { Lidar } from "./lidar.js";
+import { DQNAgent } from "./ai.js";
+const tf = window.tf;
 
 let jumpV = -400;
 let speed = -150;
@@ -81,9 +85,7 @@ let lastObservation;
 let lastAction;
 let currentAction;
 
-const lidarRayAngles = [-Math.PI / 4, 0, Math.PI / 4]; // diagonally up, straight, down
-const lidarRayLength = 300; // how far each ray can "see"
-const lidarRayStep = 5; // step in pixels per ray trace
+let awaitingRestart = false;
 
 let point;
 let hit;
@@ -92,6 +94,7 @@ let die;
 let finalScoreText;
 
 let score = 0;
+let lastScore = 0;
 let scoreText;
 let isRefresh = false;
 let hitPlayed = false;
@@ -105,13 +108,14 @@ let baseWidth;
 
 let gameStart = false;
 
-import { DQNAgent } from "./ai.js";
-const tf = window.tf;
-
 // let game = new Phaser.Game(config);
 let game = new Phaser.Game(isPortrait ? configPortrait : configLandscape);
-
+let lidar = new Lidar(300);
+let seeLidar = false;
+let graphics;
 let agent;
+let loadModel = true;
+let logged = false;
 
 // Wait for Phaser to finish scene creation
 window.addEventListener("load", () => {
@@ -124,12 +128,12 @@ window.addEventListener("load", () => {
       trainingMode = isAIControlled;
 
       if (!agent) {
-        agent = new DQNAgent(7, 2, {
+        agent = new DQNAgent(180, 2, {
           // 7 = 4 features + 3 lidar rays
           gamma: 0.99,
-          lr: 0.01,
+          lr: 0.001,
           memoryCapacity: 10000,
-          batchSize: 32,
+          batchSize: 64,
         });
         console.log("🧠 New DQNAgent initialized.");
       }
@@ -143,35 +147,54 @@ window.addEventListener("load", () => {
     // Save model
     if (event.key === "s" || event.key === "S") {
       if (agent && agent.model) {
-        await agent.model.save("indexeddb://flappybird-dqn");
-        console.log("💾 Model saved to your Downloads folder.");
+        await agent.model.save("downloads://flappybird-dqn");
+        console.log("💾 Model downloaded as flappybird-dqn.json + .bin");
       } else {
         console.warn("⚠️ No model to save.");
       }
     }
 
-    // Load model
-    if (event.key === "l" || event.key === "L") {
-      try {
-        const loadedModel = await tf.loadLayersModel("/tfjs_model/model.json");
-
-        if (agent) {
-          agent.model = loadedModel;
-          console.log("📂 Model loaded successfully!");
-        } else {
-          console.warn("⚠️ No agent defined. Define one first with 'T'.");
-        }
-      } catch (err) {
-        console.error("❌ Failed to load model:", err);
+    // Load model and run a round
+    if (event.key === "a" || event.key === "A") {
+      if (!agent) {
+        agent = new DQNAgent(180, 2, {
+          gamma: 0.99,
+          lr: 0.001,
+          memoryCapacity: 10000,
+          batchSize: 64,
+        });
       }
+
+      if (!loadModel) {
+        console.log("🚫 loadModel is false — skipping model load.");
+        return;
+      }
+
+      try {
+        const loadedModel = await tf.loadLayersModel("./flappybird-dqn.json");
+        agent.model = loadedModel;
+        console.log("📂 Model loaded successfully from ./flappybird-dqn.json");
+
+        isAIControlled = !isAIControlled;
+        console.log(`🎯 AI mode ${isAIControlled ? "enabled" : "paused"}`);
+      } catch (err) {
+        console.error("❌ Failed to load model from file:", err);
+      }
+    }
+
+    //toggle lidar
+    if (event.key === "l" || event.key === "L") {
+      seeLidar = !seeLidar;
+      graphics.clear();
+      console.log(`🎯 Lidar ${seeLidar ? "enabled" : "paused"}`);
     }
   });
 });
 
-let epsilonStart = 0.5;
-let epsilonEnd = 0.01;
+let epsilonStart = 1;
+let epsilonEnd = 0.05;
 let episodeCount = 0;
-let totalEpisodes = 1000;
+let totalEpisodes = 500;
 let maxStepsPerEpisode = 1000;
 
 function getEpsilon(episode) {
@@ -202,72 +225,19 @@ function getNextPipe(scene) {
 }
 
 function getObservation(scene) {
-  const next = getNextPipe(scene);
+  const lidarValues = lidar.scan(
+    character.x,
+    character.y,
+    0,
+    character.width,
+    character.height,
+    scene.upperPillars,
+    scene.lowerPillars,
+    scene.scale.height - baseHeight,
+    scene
+  );
 
-  // Normalize each component:
-  const birdY =
-    (character.y - scene.scale.height / 2) / (scene.scale.height / 2); // from -1 (top) to +1 (bottom)
-  const birdVY = character.body.velocity.y / 400; // roughly -1 (flap) to +1 (fall)
-  const pipeDistX = (next.upper.x - character.x) / scene.scale.width; // 0 (overlap) to 1 (far away)
-
-  const pipeGapY = (next.lower.y + next.upper.y) / 2;
-  const pipeDistY = (pipeGapY - character.y) / scene.scale.height; // center difference, normalized
-
-  const lidar = getLidarReadings(scene);
-
-  return [
-    Phaser.Math.Clamp(birdY, -1, 1),
-    Phaser.Math.Clamp(birdVY, -1, 1),
-    Phaser.Math.Clamp(pipeDistX, 0, 1),
-    Phaser.Math.Clamp(pipeDistY, -1, 1),
-    ...lidar,
-  ];
-}
-
-function getLidarReadings(scene) {
-  const readings = [];
-
-  const pipes = [
-    ...scene.upperPillars.getChildren(),
-    ...scene.lowerPillars.getChildren(),
-  ];
-  const baseY = scene.scale.height;
-
-  for (let angle of lidarRayAngles) {
-    let rayDist = lidarRayLength;
-
-    for (let d = 0; d < lidarRayLength; d += lidarRayStep) {
-      const x = character.x + d * Math.cos(angle);
-      const y = character.y + d * Math.sin(angle);
-
-      // stop if off-screen
-      if (y <= 0 || y >= baseY || x >= scene.scale.width) {
-        rayDist = d;
-        break;
-      }
-
-      // stop if ray intersects any pipe
-      for (let pipe of pipes) {
-        const bounds = pipe.getBounds();
-        if (
-          x >= bounds.left &&
-          x <= bounds.right &&
-          y >= bounds.top &&
-          y <= bounds.bottom
-        ) {
-          rayDist = d;
-          break;
-        }
-      }
-
-      if (rayDist !== lidarRayLength) break;
-    }
-
-    // Normalize distance (0 = close obstacle, 1 = clear view)
-    readings.push(rayDist / lidarRayLength);
-  }
-
-  return readings;
+  return lidarValues;
 }
 
 function computeReward(scene) {
@@ -275,32 +245,25 @@ function computeReward(scene) {
 
   const next = getNextPipe(scene);
 
-  const currentScore = scene.score;
-  if (typeof computeReward.lastScore === "undefined") {
-    computeReward.lastScore = currentScore;
+  if (score > lastScore) {
+    reward += 10.0; // Pipe passed
+    lastScore = score;
   }
 
-  if (currentScore > computeReward.lastScore) {
-    reward += 5.0; // Pipe passed
-    computeReward.lastScore = currentScore;
+  // Ground death
+  const groundY = scene.scale.height - baseHeight;
+  if (scene.isGameOver && character.y >= groundY - character.height) {
+    reward -= 15.0; // Custom floor death penalty
+  }
+  // Pipe or midair death
+  else if (scene.isGameOver) {
+    reward -= 10.0;
   }
 
-  if (scene.character.y <= 0) {
-    reward -= 1; // Ceiling penalty
+  if (scene.character.y <= character.height / 2) {
+    reward -= 3; // proximity to top penalty
+    //console.log("Ceiling Penalty");
   }
-
-  if (scene.isGameOver) {
-    reward -= 1.0; // Death penalty
-  }
-
-  if (scene.character.y < 50) {
-    reward -= 1; // proximity to top penalty
-  }
-
-  const gapCenter = (next.lower.y + next.upper.y) / 2;
-  const distToGap = Math.abs(gapCenter - character.y) / scene.scale.height; // normalized distance
-
-  reward -= distToGap / scene.scale.height; // small penalty for being far from target
 
   return reward;
 }
@@ -348,7 +311,7 @@ function create() {
   base.setOrigin(0.5, 1);
   base.y = this.scale.height;
   base.y = Math.round(base.y);
-
+  base.setAlpha(0.5);
   this.physics.add.existing(base, true);
   base.setDepth(1);
   let startGameImage = this.add.image(
@@ -371,6 +334,9 @@ function create() {
   character.setCollideWorldBounds(true);
   character.body.allowGravity = false;
   this.character = character;
+
+  lidar = new Lidar(300); // pass scene reference
+  graphics = this.add.graphics();
 
   gameStart = false;
   this.anims.create({
@@ -429,32 +395,64 @@ function create() {
 function update() {
   if (!this || !this.upperPillars || !this.lowerPillars) return;
   if (!this?.upperPillars?.children || !this?.lowerPillars?.children) return;
+  if (awaitingRestart) return;
+
   // ✅ still allow training step even when game is over
-  if (trainingMode && isAIControlled && this.isGameOver) {
-    if (typeof lastObservation !== "undefined") {
-      agent.memory.push(lastObservation, lastAction, -1, lastObservation, true);
+
+  if (!this.gameStart || this.isGameOver) {
+    let reward = 0;
+    reward = computeReward(this);
+    if (!logged) {
+      totalRewardThisEpisode += reward;
+
+      console.log(
+        `🧠 Episode ${
+          episodeCount + 1
+        }, Reward: ${totalRewardThisEpisode.toFixed(
+          2
+        )}, Steps: ${currentEpisodeSteps}, Score: ${score}, Epsilon: ${getEpsilon(
+          episodeCount
+        ).toFixed(2)}`
+      );
+      logged = true;
+      totalRewardThisEpisode = 0;
     }
-    const reward = computeReward(this);
-    totalRewardThisEpisode += reward;
+    if (trainingMode && isAIControlled && this.isGameOver) {
+      if (episodeCount >= totalEpisodes) {
+        console.log("🎓 Training complete — max episodes reached.");
+        trainingMode = false;
+        isAIControlled = false;
+        agent.model.save("downloads://flappybird-dqn");
+        console.log("💾 Model downloaded as flappybird-dqn.json + .bin");
+        return;
+      }
 
-    console.log(
-      `🧠 Episode ${
-        episodeCount + 1
-      } done — Reward: ${totalRewardThisEpisode.toFixed(
-        2
-      )}, Steps: ${currentEpisodeSteps}, Epsilon: ${getEpsilon(episodeCount)}`
-    );
-    currentEpisodeSteps = 0;
-    totalRewardThisEpisode = 0;
-    lastObservation = undefined;
-    lastAction = undefined;
+      if (typeof lastObservation !== "undefined") {
+        agent.memory.push(
+          lastObservation,
+          lastAction,
+          reward,
+          lastObservation,
+          true
+        );
+      }
 
-    episodeCount++;
+      currentEpisodeSteps = 0;
 
-    this.handleRestart();
+      lastObservation = undefined;
+      lastAction = undefined;
+
+      episodeCount++;
+      awaitingRestart = true;
+
+      setTimeout(() => {
+        awaitingRestart = false;
+        this.handleRestart();
+      }, 300); // 🕒 300ms delay between episodes
+    }
+
+    return;
   }
-
-  if (!this.gameStart || this.isGameOver) return;
 
   // move base & background
   base.tilePositionX += 2.5;
@@ -470,6 +468,17 @@ function update() {
         pillar.hasPassed = true;
         if (!scoreIncremented) {
           score++;
+
+          if (trainingMode && score >= 100 && agent && agent.model) {
+            console.log("🏆 Score 100 reached! Saving model...");
+
+            trainingMode = false;
+            isAIControlled = false;
+
+            agent.model.save("downloads://flappybird-dqn");
+            console.log("✅ Model saved automatically.");
+          }
+
           scoreText.setText(score);
           if (!trainingMode) point.play();
           scoreIncremented = true;
@@ -480,8 +489,36 @@ function update() {
       }
     });
   });
+
+  //Lidar visualization
+  if (seeLidar) {
+    const lidarReadings = lidar.scan(
+      character.x,
+      character.y,
+      0,
+      character.width,
+      character.height,
+      this.upperPillars,
+      this.lowerPillars,
+      this.scale.height - baseHeight,
+      this
+    );
+
+    // Clear old lines before drawing
+    graphics.clear();
+
+    lidar.draw(
+      this,
+      character.x,
+      character.y,
+      character.width,
+      character.height,
+      graphics
+    );
+  }
+
   scoreIncremented = false;
-  if (this.pillarSpawnTime < this.time.now) {
+  if (isLastPipeFarEnough(this, 200)) {
     this.spawnPillarPair();
   }
 
@@ -494,10 +531,11 @@ function update() {
     }
   }
 
+  let reward = 0;
+  reward = computeReward(this);
+  totalRewardThisEpisode += reward;
   if (isAIControlled && this.gameStart && !this.isGameOver) {
     const currentObs = getObservation(this);
-    const reward = computeReward(this);
-    totalRewardThisEpisode += reward;
 
     // Store in memory
     if (typeof lastObservation !== "undefined") {
@@ -508,7 +546,10 @@ function update() {
     lastAction = currentAction;
 
     currentEpisodeSteps++;
-    agent.optimizeModel();
+
+    if (trainingMode) {
+      agent.optimizeModel();
+    }
   }
 
   const velocityY = character.body.velocity.y;
@@ -533,6 +574,7 @@ function update() {
     );
     character.setAngle(angle);
   }
+  logged = false;
 }
 
 Phaser.Scene.prototype.handleFlap = function () {
@@ -548,6 +590,7 @@ Phaser.Scene.prototype.handleGameStart = function () {
   gameStart = true;
   this.gameStart = true;
   this.isGameOver = false;
+  totalRewardThisEpisode = 0;
 
   character.body.allowGravity = true;
   if (!trainingMode) {
@@ -579,7 +622,6 @@ Phaser.Scene.prototype.handleGameStart = function () {
   });
   scoreText.setOrigin(0.5, 0.5);
   scoreText.setDepth(1);
-  this.score = score;
   point = this.sound.add("score");
   hit = this.sound.add("hit");
   wing = this.sound.add("wing");
@@ -592,14 +634,15 @@ Phaser.Scene.prototype.handleRestart = function () {
   this.isGameOver = false;
 
   score = 0;
-  computeReward.lastScore = 0;
+  lastScore = 0;
+
   gameStart = false;
   this.gameStart = false;
   this.scene.restart();
   hitPlayed = false;
   diePlayed = false;
   isRefresh = true;
-
+  totalRewardThisEpisode = 0;
   setTimeout(() => {
     if (trainingMode && isAIControlled) {
       const scene = game.scene.scenes[0];
@@ -608,17 +651,30 @@ Phaser.Scene.prototype.handleRestart = function () {
   }, 50);
 };
 
+function isLastPipeFarEnough(scene, minDistance = 100) {
+  const upperPipes = scene.upperPillars.getChildren();
+  if (upperPipes.length === 0) return true;
+
+  const lastPipe = upperPipes[upperPipes.length - 1];
+  const distanceFromRight = scene.scale.width - lastPipe.x;
+
+  return distanceFromRight >= minDistance;
+}
+
 Phaser.Scene.prototype.spawnPillarPair = function () {
   baseImage = this.textures.get("base");
   baseHeight = baseImage.getSourceImage().height;
+  const screenHeight = this.scale.height;
   let pillarImage = this.textures.get("pillar");
   let pillarHeight = pillarImage.getSourceImage().height;
-  let Offset = (Math.random() * pillarHeight) / 2;
-  let k = Math.floor(Math.random() * 3) - 1;
-  Offset = Offset * k;
-  let gapHeight = (1 / 3) * (this.scale.height - baseHeight);
-  let lowerY = 2 * gapHeight + pillarHeight / 2 + Offset;
-  let upperY = gapHeight - pillarHeight / 2 + Offset;
+
+  let gapHeight = 200;
+  const minGapCenter = gapHeight / 2;
+  const maxGapCenter = screenHeight - baseHeight - gapHeight / 2;
+  const gapCenterY = Phaser.Math.Between(minGapCenter, maxGapCenter);
+  const upperY = gapCenterY - gapHeight / 2 - pillarHeight / 2;
+  const lowerY = gapCenterY + gapHeight / 2 + pillarHeight / 2;
+
   let upperPillar = this.upperPillars.create(
     this.scale.width,
     upperY,
@@ -635,8 +691,10 @@ Phaser.Scene.prototype.spawnPillarPair = function () {
 
   upperPillar.setVelocityX(speed);
   lowerPillar.setVelocityX(speed);
+  upperPillar.setAlpha(0.5);
+  lowerPillar.setAlpha(0.5);
+
   this.pillarSpawnTime = this.time.now + spawnTime;
-  console.log("Pillar spawned at", this.time.now);
 };
 
 function hitBase(character, base) {

@@ -36,7 +36,7 @@ export class ExperienceReplay {
 // ===============================
 // Q-Network
 // ===============================
-export function createQNet(inputSize, outputSize, hiddenSizes = [256, 256]) {
+export function createQNet(inputSize, outputSize, hiddenSizes = [128, 128]) {
   const model = tf.sequential();
 
   model.add(
@@ -84,7 +84,7 @@ export class DQNAgent {
   constructor(
     inputSize,
     outputSize,
-    { gamma = 0.99, lr = 0.01, memoryCapacity = 10000, batchSize = 64 } = {}
+    { gamma = 0.99, lr = 0.001, memoryCapacity = 10000, batchSize = 64 } = {}
   ) {
     this.inputSize = inputSize;
     this.outputSize = outputSize;
