@@ -668,7 +668,7 @@ Phaser.Scene.prototype.spawnPillarPair = function () {
   let pillarImage = this.textures.get("pillar");
   let pillarHeight = pillarImage.getSourceImage().height;
 
-  let gapHeight = 130;
+  let gapHeight = 120;
   const minGapCenter = gapHeight / 2;
   const maxGapCenter = screenHeight - baseHeight - gapHeight / 2;
   const gapCenterY = Phaser.Math.Between(minGapCenter, maxGapCenter);
