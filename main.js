@@ -311,7 +311,7 @@ function create() {
   base.setOrigin(0.5, 1);
   base.y = this.scale.height;
   base.y = Math.round(base.y);
-  base.setAlpha(0.5);
+  //base.setAlpha(0.5);
   this.physics.add.existing(base, true);
   base.setDepth(1);
   let startGameImage = this.add.image(
@@ -668,7 +668,7 @@ Phaser.Scene.prototype.spawnPillarPair = function () {
   let pillarImage = this.textures.get("pillar");
   let pillarHeight = pillarImage.getSourceImage().height;
 
-  let gapHeight = 200;
+  let gapHeight = 130;
   const minGapCenter = gapHeight / 2;
   const maxGapCenter = screenHeight - baseHeight - gapHeight / 2;
   const gapCenterY = Phaser.Math.Between(minGapCenter, maxGapCenter);
@@ -691,8 +691,8 @@ Phaser.Scene.prototype.spawnPillarPair = function () {
 
   upperPillar.setVelocityX(speed);
   lowerPillar.setVelocityX(speed);
-  upperPillar.setAlpha(0.5);
-  lowerPillar.setAlpha(0.5);
+  //upperPillar.setAlpha(0.5);
+  //lowerPillar.setAlpha(0.5);
 
   this.pillarSpawnTime = this.time.now + spawnTime;
 };
